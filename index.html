@@ -1,0 +1,15 @@
+<html>
+    <head>
+        <script src="dist/egl.umd.js"></script>
+    </head>
+    <body>
+        <h4>Hello there</h4>
+        <canvas style="width: 600px; height: 600px;"></canvas>
+
+        <script>
+            var canvas = document.querySelector("canvas");
+            var egl = new EglViz(canvas);
+            console.log(egl);
+        </script>
+    </body>
+</html>
