@@ -1,68 +1,69 @@
-import Wglr from './webgl.renderer';
-import * as d3 from 'd3';
+import WglWorker from 'web-worker:./wegl.worker.js';
 
 export default class EglViz {
   constructor(canvas) {
+    var self = this;
 
-    this.canvas = canvas;
+    self.canvas = canvas;
+    self.mousedrag = false;
 
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
 
-    const gl = canvas.getContext("webgl2", {
-      // alpha: false,
-      // premultipliedAlpha: false,
-      // preserveDrawingBuffer: true,
-    }
+    // TODO: check ahead of time if webgl is supported
+    const offscreenCanvas = self.canvas.transferControlToOffscreen();
+
+    self.webglWorker = new WglWorker();
+
+    self.webglWorker.postMessage(
+      {
+        type: "init",
+        canvas: offscreenCanvas,
+      },
+      [offscreenCanvas]
     );
 
-    // If we don't have a GL context, fail
-    if (!gl) {
-      throw "Browser does not support WebGL!";
-    }
-
-    this.wglr = new Wglr(gl);
-
-    // generate random data
-    let x = Array(50), y = Array(50);
-    for (var ii = 0; ii < 50; ++ii) {
-
-      // need a scale here for points
-      x.push(parseInt(Math.random() * 100));
-      y.push(parseInt(Math.random() * 100));
-    }
-
-    let xExtent = d3.extent(x);
-    let yExtent = d3.extent(y);
-
-    let xScale = d3.scaleLinear()
-      .domain(xExtent)
-      .range([0, gl.canvas.width]);
-
-    var yScale = d3.scaleLinear()
-      .domain(yExtent)
-      .range([gl.canvas.height, 0]);
-
-    this.wglr.setScale(xScale, yScale);
-    this.wglr.setData({ x, y });
-    this.wglr.render();
-
-    var self = this;
-
     canvas.addEventListener('mousedown', (e) => {
+      self.mousedrag = true;
+      // canvas.addEventListener('mouseup', this.handleMouseUp.bind(self));
+      self.canvas.addEventListener('mousemove', self.handleMouseMove.bind(self));
       e.preventDefault();
-      window.addEventListener('mousemove', this.handleMouseMove.bind(self));
-      window.addEventListener('mouseup', this.handleMouseUp.bind(self));
-      const clip = this.getClipSpaceMousePosition(e);
 
-      this.wglr.handlePan(clip);
+      const clip = self.getClipSpaceMousePosition(e);
+
+      self.webglWorker.postMessage(
+        {
+          type: "handlePan",
+          clip: clip,
+        }
+      );
+    });
+
+    canvas.addEventListener('mouseup', (e) => {
+      self.mousedrag = false;
+      self.canvas.removeEventListener('mousemove', self.handleMouseMove.bind(self));
+      e.preventDefault();
+
+      const clip = self.getClipSpaceMousePosition(e);
+
+      self.webglWorker.postMessage(
+        {
+          type: "handlePan",
+          clip: clip,
+        }
+      );
     });
 
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const [clipX, clipY] = this.getClipSpaceMousePosition(e);
+      const [clipX, clipY] = self.getClipSpaceMousePosition(e);
 
-      this.wglr.handleZoom(clipX, clipY, e.deltaY);
+      self.webglWorker.postMessage(
+        {
+          type: "handleZoom",
+          clip: [clipX, clipY, e.deltaY],
+        }
+      );
     });
   }
 
@@ -84,13 +85,61 @@ export default class EglViz {
   }
 
   handleMouseMove(e) {
-    const clip = this.getClipSpaceMousePosition(e);
-    this.wglr.moveCamera(clip);
+    var self = this;
+    e.preventDefault();
+
+    if (this.mousedrag) {
+      const clip = this.getClipSpaceMousePosition(e);
+
+      self.webglWorker.postMessage(
+        {
+          type: "moveCamera",
+          clip: clip,
+        }
+      );
+    }
   }
 
-  handleMouseUp(e) {
-    this.wglr.render();
-    window.removeEventListener('mousemove', this.handleMouseMove);
-    window.removeEventListener('mouseup', this.handleMouseUp);
+  render(data) {
+
+    // validation
+    // if (!('x' in data) || !('y' in data)) {
+    //   throw "data does not contain x and y coordinates";
+    // }
+
+    // generate random data
+    let t0 = performance.now();
+    let dsize = 10000;
+    let x = Array(dsize), y = Array(dsize), r=Array(dsize), g =Array(dsize), b =Array(dsize);
+    for (var ii = 0; ii < dsize; ++ii) {
+
+      // need a scale here for points
+      x.push(Math.random() * 100);
+      y.push(Math.random() * 100);
+      r.push(Math.random());
+      g.push(Math.random());
+      b.push(Math.random());
+    }
+    console.log("generating points, ", performance.now() - t0);
+
+    this.webglWorker.postMessage(
+      {
+        type: "setData",
+        data: { x, y },
+      }
+    );
+
+    this.webglWorker.postMessage(
+      {
+        type: "setColors",
+        data: { r, g, b },
+      }
+    );
+
+    this.webglWorker.postMessage(
+      {
+        type: "render"
+      }
+    );
   }
 }

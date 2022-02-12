@@ -6,49 +6,19 @@
 // TODO: currently does not use twgl but would reduce the lines here
 
 import * as m3 from './m3.js';
-
-const vertexShaderSource = `#version 300 es
-
-    // buffer for points
-    in vec2 in_dotXY;
-
-    // size of point
-    uniform float u_dotSize;
-
-    // projections for zoom/pan
-    uniform mat3 u_mat;
-
-    void main() {
-        gl_Position = vec4((u_mat * vec3(in_dotXY, 1)).xy, 0, 1);
-        gl_PointSize = u_dotSize;
-    }
-`;
-
-const fragmentShaderSource = `#version 300 es
-
-    // precision
-    precision highp float;
-
-    // colors for each point
-    uniform vec4 u_dotColor;
-
-    // declare an output 
-    // for the fragment shader
-    out vec4 out_color;
-
-    void main() {
-
-        float d = distance(gl_PointCoord, vec2(0.5, 0.5));
-        if(d < .5) { 
-            out_color = u_dotColor;
-        }
-        else { discard; }
-    }
-`;
+import Flatbush from 'flatbush';
+import { vertexShaderSource, fragmentShaderSource } from './wegl.shaders';
+import * as d3 from 'd3';
 
 class Wglr {
-    constructor(gl) {
-        this.gl = gl;
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.gl = this.canvas.getContext("webgl2", {
+            // alpha: false,
+            // premultipliedAlpha: false,
+            // preserveDrawingBuffer: true,
+        });
+
         // create GLSL shaders, upload the GLSL source, compile the shaders
         this.vShader = this.getVShader();
         this.fShader = this.getFShader();
@@ -88,6 +58,7 @@ class Wglr {
         var size = 2; // 2 components per iteration
         var type = this.gl.FLOAT; // the data is 32bit floats
         var normalize = false; // don't normalize the data
+        // TODO: these two are useful when the buffer contains an array of points
         var stride = 0; // 0 = move forward size * sizeof(type) each iteration to get the next position
         var offset = 0; // start at the beginning of the buffer
 
@@ -121,6 +92,7 @@ class Wglr {
         this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
     }
 
+    // creating shaders
     createShader(type, source) {
         let shader = this.gl.createShader(type);
         this.gl.shaderSource(shader, source);
@@ -130,11 +102,13 @@ class Wglr {
             return shader;
         }
 
-        console.log(this.gl.getShaderInfoLog(shader));  // eslint-disable-line
+        // console.log(this.gl.getShaderInfoLog(shader));  
+        // eslint-disable-line
         this.gl.deleteShader(shader);
         return undefined;
     }
 
+    // use the shaders to create a program
     createProgram(vertexShader, fragmentShader) {
         let program = this.gl.createProgram();
         this.gl.attachShader(program, vertexShader);
@@ -146,7 +120,8 @@ class Wglr {
             return program;
         }
 
-        console.log(this.gl.getProgramInfoLog(program));  // eslint-disable-line
+        // console.log(this.gl.getProgramInfoLog(program));  
+        // eslint-disable-line
         this.gl.deleteProgram(program);
         return undefined;
     }
@@ -159,6 +134,7 @@ class Wglr {
         return this.createShader(this.gl.FRAGMENT_SHADER, fragmentShaderSource);
     }
 
+    // initial camera
     makeCameraMatrix() {
         const zoomScale = 1 / this.camera.zoom;
         let cameraMat = m3.identity();
@@ -176,22 +152,14 @@ class Wglr {
         this.viewProjectionMat = m3.multiply(projectionMat, viewMat);
     }
 
+    // setData automatically calls this unless you want to control the scale
     setScale(xScale, yScale) {
         this.xScale = xScale;
         this.yScale = yScale;
     }
 
-    moveCamera(clip) {
-        const pos = m3.transformPoint(
-            m3.inverse(this.viewProjectionMat),
-            clip);
-
-        this.camera.x = this.startCamera.x + this.startPos[0] - pos[0];
-        this.camera.y = this.startCamera.y + this.startPos[1] - pos[1];
-        this.render();
-    }
-
     handleZoom(clipX, clipY, deltaY) {
+        // console.log("handleZoom, ", clipX, clipY, deltaY);
         // position before zooming
         const [preZoomX, preZoomY] = m3.transformPoint(
             m3.inverse(this.viewProjectionMat),
@@ -214,7 +182,19 @@ class Wglr {
         this.render();
     }
 
+    moveCamera(clip) {
+        // console.log("moveCamer, ", clip);
+        const pos = m3.transformPoint(
+            m3.inverse(this.viewProjectionMat),
+            clip);
+
+        this.camera.x = this.startCamera.x + this.startPos[0] - pos[0];
+        this.camera.y = this.startCamera.y + this.startPos[1] - pos[1];
+        this.render();
+    }
+
     handlePan(clip) {
+        // console.log("handlePan, ", clip);
         this.startCamera = Object.assign({}, this.camera);
 
         this.startPos = m3.transformPoint(
@@ -227,9 +207,39 @@ class Wglr {
 
     setData(data) {
         this.data = data;
+
+        let xExtent = d3.extent(this.data.x);
+        let yExtent = d3.extent(this.data.y);
+
+        let xScale = d3.scaleLinear()
+            .domain(xExtent)
+            .range([0, this.gl.canvas.width]);
+
+        var yScale = d3.scaleLinear()
+            .domain(yExtent)
+            .range([this.gl.canvas.height, 0]);
+
+        this.setScale(xScale, yScale);
+
+        // index the data
+        this.dIdx = new Flatbush(this.data.x.length);
+        for (let i = 0; i < this.data.x.length; i++) {
+            this.dIdx.add(this.data.x[i] - 5, this.data.y[i] - 5,
+                this.data.x[i] + 5, this.data.y[i] + 5)
+        }
+
+        this.dIdx.finish();
+    }
+
+    setColors(data) {
+        this.colors = data;
     }
 
     render() {
+
+        // TODO: only select points currently in viewport as the 
+        // camera moves and render
+
         // Clear the canvas
         this.gl.clearColor(0, 0, 0, 0);
         this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
@@ -244,11 +254,7 @@ class Wglr {
 
         for (let i = 0; i < this.data.x.length; i++) {
 
-            var r = Math.random();
-            var g = Math.random();
-            var b = Math.random();
-
-            // TODO: set multiple points in the buffer for batch rendering
+            // TODO: can i set multiple points at once to render in batches ?
             this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array([
                 this.xScale(this.data.x[i]), this.yScale(this.data.y[i]), 0
             ]), this.gl.STATIC_DRAW);
@@ -257,10 +263,12 @@ class Wglr {
                 this.xScale(this.data.x[i]), this.yScale(this.data.y[i]),
                 0, 1);
             this.gl.uniform1f(this.glState.dotSize, 10);
-            this.gl.uniform4f(this.glState.dotColor, r, g, b, 1);
-            this.gl.uniformMatrix3fv(this.glState.projMat, false, this.viewProjectionMat)
+            this.gl.uniform4f(this.glState.dotColor, 
+                this.colors['r'][i], this.colors['g'][i], this.colors['b'][i], 1);
+            this.gl.uniformMatrix3fv(this.glState.projMat, false, this.viewProjectionMat);
 
-            // TODO: iterative over size of the buffer and change the offset here
+            // TODO: if the previous todo is true, we can iterative over size of the buffer 
+            // and change the offset here
             this.gl.drawArrays(this.gl.POINTS, 0, 1);
         }
     }
