@@ -109,18 +109,19 @@ export default class EglViz {
 
     // generate random data
     let t0 = performance.now();
-    let dsize = 10000;
-    let x = Array(dsize), y = Array(dsize), r=Array(dsize), g =Array(dsize), b =Array(dsize);
-    for (var ii = 0; ii < dsize; ++ii) {
+    let dsize = 10000000;
+    let x = Array(), y = Array(), color = Array();
+    for (var ii = 0; ii < dsize; ii++) {
 
-      // need a scale here for points
-      x.push(Math.random() * 100);
-      y.push(Math.random() * 100);
-      r.push(Math.random());
-      g.push(Math.random());
-      b.push(Math.random());
+        // need a scale here for points
+        // x.push(Math.random() * 2 - 1);
+        // y.push(Math.random() * 2 - 1);
+        x.push(Math.random() * this.canvas.width);
+        y.push(Math.random() * this.canvas.height);
+        color.push((Math.random() * 256 << 16) | (Math.random() * 256 << 8) | (Math.random() * 256 << 0))
     }
     console.log("generating points, ", performance.now() - t0);
+    console.log(x, y, color);
 
     this.webglWorker.postMessage(
       {
@@ -132,7 +133,7 @@ export default class EglViz {
     this.webglWorker.postMessage(
       {
         type: "setColors",
-        data: { r, g, b },
+        data: color,
       }
     );
 

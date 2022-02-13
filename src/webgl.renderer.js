@@ -9,6 +9,7 @@ import * as m3 from './m3.js';
 import Flatbush from 'flatbush';
 import { vertexShaderSource, fragmentShaderSource } from './wegl.shaders';
 import * as d3 from 'd3';
+import * as twgl from 'twgl.js';
 
 class Wglr {
     constructor(canvas) {
@@ -16,35 +17,15 @@ class Wglr {
         this.gl = this.canvas.getContext("webgl2", {
             // alpha: false,
             // premultipliedAlpha: false,
-            // preserveDrawingBuffer: true,
         });
 
-        // create GLSL shaders, upload the GLSL source, compile the shaders
-        this.vShader = this.getVShader();
-        this.fShader = this.getFShader();
+        this.programInfo = twgl.createProgramInfo(this.gl, [vertexShaderSource, fragmentShaderSource]);
 
-        // Link the two shaders to a program
-        this.program = this.createProgram(this.vShader, this.fShader);
+        this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        // gl.scissor(0, 0, canvas_width, canvas_height);
 
-        // Get shaders attributes and uniforms from program
-        let dotXY = this.gl.getAttribLocation(this.program, 'in_dotXY');
-        let dotSize = this.gl.getUniformLocation(this.program, 'u_dotSize');
-        let dotColor = this.gl.getUniformLocation(this.program, 'u_dotColor');
-        let projMat = this.gl.getUniformLocation(this.program, "u_mat");
-
-        // set a class level state for all params to shaders
-        this.glState = {
-            dotXY, dotSize, dotColor, projMat
-        };
-
-        // Create a buffer
-        let dotXYBuffer = this.gl.createBuffer();
-
-        // Create & enable a vertex array object on the buffer
-        this.vao = this.gl.createVertexArray();
-        this.gl.bindVertexArray(this.vao);
-        this.gl.enableVertexAttribArray(dotXY);
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, dotXYBuffer);
+        this.gl.clearColor(1, 1, 1, 1.0);
+        this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
 
         // set the camera position
         this.camera = {
@@ -53,18 +34,6 @@ class Wglr {
             rotation: 0,
             zoom: 1,
         };
-
-        // TODO: modify this later to buffer many points at once
-        var size = 2; // 2 components per iteration
-        var type = this.gl.FLOAT; // the data is 32bit floats
-        var normalize = false; // don't normalize the data
-        // TODO: these two are useful when the buffer contains an array of points
-        var stride = 0; // 0 = move forward size * sizeof(type) each iteration to get the next position
-        var offset = 0; // start at the beginning of the buffer
-
-        this.gl.vertexAttribPointer(
-            this.glState.dotXY, size,
-            type, normalize, stride, offset);
 
         // other params for tracking camera and projection matrices
         this.viewProjectionMat = null;
@@ -82,6 +51,11 @@ class Wglr {
             color: null,
             opacity: null,
         }
+
+        this.vArrays = {};
+        this.uArrays = {
+            u_dotSize: 10
+        };
     }
 
     setViewPort() {
@@ -90,48 +64,6 @@ class Wglr {
         // dimensions and are translated to clip space at using the
         // projection matrix
         this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
-    }
-
-    // creating shaders
-    createShader(type, source) {
-        let shader = this.gl.createShader(type);
-        this.gl.shaderSource(shader, source);
-        this.gl.compileShader(shader);
-        let success = this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS);
-        if (success) {
-            return shader;
-        }
-
-        // console.log(this.gl.getShaderInfoLog(shader));  
-        // eslint-disable-line
-        this.gl.deleteShader(shader);
-        return undefined;
-    }
-
-    // use the shaders to create a program
-    createProgram(vertexShader, fragmentShader) {
-        let program = this.gl.createProgram();
-        this.gl.attachShader(program, vertexShader);
-        this.gl.attachShader(program, fragmentShader);
-        this.gl.linkProgram(program);
-
-        let success = this.gl.getProgramParameter(program, this.gl.LINK_STATUS);
-        if (success) {
-            return program;
-        }
-
-        // console.log(this.gl.getProgramInfoLog(program));  
-        // eslint-disable-line
-        this.gl.deleteProgram(program);
-        return undefined;
-    }
-
-    getVShader() {
-        return this.createShader(this.gl.VERTEX_SHADER, vertexShaderSource);
-    }
-
-    getFShader() {
-        return this.createShader(this.gl.FRAGMENT_SHADER, fragmentShaderSource);
     }
 
     // initial camera
@@ -179,7 +111,7 @@ class Wglr {
         this.camera.x += preZoomX - postZoomX;
         this.camera.y += preZoomY - postZoomY;
 
-        this.render();
+        requestAnimationFrame(this.update.bind(this));
     }
 
     moveCamera(clip) {
@@ -190,7 +122,7 @@ class Wglr {
 
         this.camera.x = this.startCamera.x + this.startPos[0] - pos[0];
         this.camera.y = this.startCamera.y + this.startPos[1] - pos[1];
-        this.render();
+        requestAnimationFrame(this.update.bind(this));
     }
 
     handlePan(clip) {
@@ -202,7 +134,7 @@ class Wglr {
             clip
         );
 
-        this.render();
+        requestAnimationFrame(this.update.bind(this));
     }
 
     setData(data) {
@@ -222,55 +154,76 @@ class Wglr {
         this.setScale(xScale, yScale);
 
         // index the data
+        let d = [];
         this.dIdx = new Flatbush(this.data.x.length);
         for (let i = 0; i < this.data.x.length; i++) {
+            d.push(this.data.x[i]);
+            d.push(this.data.y[i]);
             this.dIdx.add(this.data.x[i] - 5, this.data.y[i] - 5,
                 this.data.x[i] + 5, this.data.y[i] + 5)
         }
 
         this.dIdx.finish();
+
+        this.vArrays["in_dotXY"] = {
+            data: d,
+            numComponents: 2,
+        };
+
+        this.updateGLConfig();
     }
 
-    setColors(data) {
-        this.colors = data;
+    setColors(color) {
+        this.colors = color;
+
+        this.vArrays["in_dotColor"] = {
+            data: color,
+            numComponents: 1
+        }
+
+        this.updateGLConfig();
+    }
+
+    updateGLConfig() {
+        this.bufferInfo = twgl.createBufferInfoFromArrays(this.gl, this.vArrays);
+        this.vai = twgl.createVertexArrayInfo(this.gl, this.programInfo, this.bufferInfo);
+        // twgl.setUniforms(this.programInfo, this.uArrays);
     }
 
     render() {
-
-        // TODO: only select points currently in viewport as the 
-        // camera moves and render
-
         // Clear the canvas
-        this.gl.clearColor(0, 0, 0, 0);
+        this.gl.clearColor(1, 1, 1, 1.0);
         this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
 
+        // Sam was using this :) 
+        this.gl.enable(this.gl.BLEND);
+        this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+            
         this.updateViewProjection();
 
-        // Tell it to use our program (pair of shaders)
-        this.gl.useProgram(this.program);
+        this.uArrays["u_mat"] = this.viewProjectionMat;
 
-        // Bind the attribute/buffer set we want.
-        this.gl.bindVertexArray(this.vao);
+        this.updateGLConfig();
 
-        for (let i = 0; i < this.data.x.length; i++) {
+        console.log(this.uArrays);
+        console.log(this.vArrays);
 
-            // TODO: can i set multiple points at once to render in batches ?
-            this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array([
-                this.xScale(this.data.x[i]), this.yScale(this.data.y[i]), 0
-            ]), this.gl.STATIC_DRAW);
+        console.log(this.vArrays["in_dotXY"]["data"].length / 2)
 
-            this.gl.vertexAttrib4f(this.glState.dotXY,
-                this.xScale(this.data.x[i]), this.yScale(this.data.y[i]),
-                0, 1);
-            this.gl.uniform1f(this.glState.dotSize, 10);
-            this.gl.uniform4f(this.glState.dotColor, 
-                this.colors['r'][i], this.colors['g'][i], this.colors['b'][i], 1);
-            this.gl.uniformMatrix3fv(this.glState.projMat, false, this.viewProjectionMat);
+        this.gl.useProgram(this.programInfo.program);
+        twgl.setUniforms(this.programInfo, this.uArrays);
+        twgl.setBuffersAndAttributes(this.gl, this.programInfo, this.vai)
+        twgl.drawBufferInfo(this.gl, this.vai, this.gl.POINTS, this.vArrays["in_dotXY"]["data"].length / 2);
+    }
 
-            // TODO: if the previous todo is true, we can iterative over size of the buffer 
-            // and change the offset here
-            this.gl.drawArrays(this.gl.POINTS, 0, 1);
-        }
+    update() {
+
+        // this.render();
+        this.updateViewProjection();
+
+        this.uArrays["u_mat"] = this.viewProjectionMat;
+        twgl.setUniforms(this.programInfo, this.uArrays);
+        twgl.drawBufferInfo(this.gl, this.vai, this.gl.POINTS, this.vArrays["in_dotXY"]["data"].length / 2);
     }
 }
 

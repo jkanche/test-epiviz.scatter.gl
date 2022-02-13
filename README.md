@@ -4,7 +4,7 @@ This library's goal is to build a fast, native webgl-based library to render sca
 
 Traditionally DOM elements are not accessible from a web worker except for `canvas`. With `OffScreenCanvas` one can now delegate rendering (large) datasets to a web worker. This makes applications rendering large datasets responsive since the main thread is available for any user interactions.
 
-TODO: 
+TODO:
 - [x] Finish up scatter plot rendering
 - [x] Move to web worker for rendering
 - [x] add index for rendering (flatbush)
